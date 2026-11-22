@@ -1,0 +1,794 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // Helper Functions
+    // =========================================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function userExists() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function companyExists() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/companies/$(request.auth.uid));
+    }
+
+    function getCompanyData() {
+      return get(/databases/$(database)/documents/companies/$(request.auth.uid)).data;
+    }
+
+    function isNotSuspended() {
+      return !userExists() || (
+        getUserData().get('isSuspended', false) != true &&
+        getUserData().get('accountStatus', 'ACTIVE') != 'SUSPENDED' &&
+        getUserData().get('status', 'ACTIVE') != 'SUSPENDED'
+      );
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.get('role', '') in ['ADMIN', 'SUPERADMIN'] ||
+        request.auth.token.get('isAdmin', false) == true ||
+        (userExists() && getUserData().get('role', '') in ['ADMIN', 'SUPERADMIN'])
+      );
+    }
+
+    function isCompany() {
+      return isAuthenticated() && (
+        request.auth.token.get('role', '') in ['COMPANY', 'company'] ||
+        (userExists() && getUserData().get('role', '') in ['COMPANY', 'company'])
+      );
+    }
+
+    function isCandidate() {
+      return isAuthenticated() && (
+        request.auth.token.get('role', '') in ['USER', 'CANDIDATE', 'user', 'candidate'] ||
+        (userExists() && getUserData().get('role', '') in ['USER', 'CANDIDATE', 'user', 'candidate'])
+      );
+    }
+
+    function isApprovedCompany() {
+      return isCompany() && isNotSuspended() && companyExists() && (
+        getCompanyData().get('verificationStatus', '') == 'APPROVED' ||
+        getCompanyData().get('status', '') == 'APPROVED'
+      );
+    }
+
+    // =========================================================================
+    // 1. Users collection
+    // =========================================================================
+    match /users/{userId} {
+      // PII-scoped read: owner, admin, or verified company browsing candidate talent pool
+      allow read: if isAuthenticated() && (
+        isOwner(userId) ||
+        isAdmin() ||
+        (isApprovedCompany() && resource.data.get('role', '') in ['USER', 'CANDIDATE', 'user', 'candidate'])
+      );
+
+      // Clients cannot self-assign ADMIN/SUPERADMIN, isAdmin, or suspension bypass flags
+      allow create: if isOwner(userId)
+        && (!('role' in request.resource.data) ||
+            request.resource.data.role in ['USER', 'CANDIDATE', 'COMPANY', 'user', 'candidate', 'company'])
+        && !('isAdmin' in request.resource.data)
+        && !('isSuspended' in request.resource.data && request.resource.data.isSuspended == true)
+        && (!('isApproved' in request.resource.data) ||
+            request.resource.data.isApproved == false ||
+            request.resource.data.get('role', '') in ['USER', 'CANDIDATE', 'user', 'candidate']);
+
+      // Owner cannot mutate role, approval, suspension, or uid (Admin SDK / Admin only)
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (isOwner(userId) &&
+         isNotSuspended() &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+           'role',
+           'isApproved',
+           'isAdmin',
+           'isSuspended',
+           'suspensionReason',
+           'suspendedAt',
+           'accountStatus',
+           'status',
+           'uid'
+         ]))
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 2. Companies collection
+    // =========================================================================
+    match /companies/{companyId} {
+      allow read: if isAuthenticated();
+
+      // Newly registered companies must start PENDING (or unset) until admin review
+      allow create: if isCompany() && isOwner(companyId) && isNotSuspended()
+        && (!('verificationStatus' in request.resource.data) ||
+            request.resource.data.verificationStatus == 'PENDING')
+        && !('verifiedAt' in request.resource.data)
+        && !('verifiedBy' in request.resource.data)
+        && !('isApproved' in request.resource.data && request.resource.data.isApproved == true);
+
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (isOwner(companyId) &&
+         isNotSuspended() &&
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+           'verificationStatus',
+           'verifiedAt',
+           'verifiedBy',
+           'verificationNotes',
+           'isApproved'
+         ]))
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 3. Jobs collection
+    // =========================================================================
+    match /jobs/{jobId} {
+      allow read: if isAuthenticated() && (
+        resource.data.status in ['PUBLISHED', 'OPEN'] ||
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+
+      allow create: if isCompany() && isNotSuspended()
+        && request.resource.data.companyId == request.auth.uid
+        && request.resource.data.get('applicantsCount', 0) == 0
+        && (
+          request.resource.data.status == 'DRAFT' ||
+          isApprovedCompany()
+        );
+
+      allow update: if isAuthenticated() && (
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId
+          && (
+            !(request.resource.data.status in ['PUBLISHED', 'OPEN']) ||
+            isApprovedCompany()
+          )) ||
+        isAdmin()
+      );
+
+      allow delete: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+    }
+
+    // =========================================================================
+    // 4. Applications collection
+    // =========================================================================
+    match /applications/{applicationId} {
+      allow read: if isAuthenticated() && (
+        resource.data.candidateId == request.auth.uid ||
+        resource.data.companyId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow create: if isAuthenticated() && isNotSuspended()
+        && request.resource.data.candidateId == request.auth.uid
+        && request.resource.data.status in ['APPLIED', 'EXAM_PENDING']
+        && (!('examScore' in request.resource.data) || request.resource.data.examScore == null)
+        && (!('overallFitScore' in request.resource.data) || request.resource.data.overallFitScore == null)
+        && (!('cvMatchScore' in request.resource.data) || request.resource.data.cvMatchScore == null)
+        && exists(/databases/$(database)/documents/jobs/$(request.resource.data.jobId))
+        && get(/databases/$(database)/documents/jobs/$(request.resource.data.jobId)).data.companyId == request.resource.data.companyId
+        && get(/databases/$(database)/documents/jobs/$(request.resource.data.jobId)).data.status in ['PUBLISHED', 'OPEN'];
+
+      allow update: if isAuthenticated() && (
+        // Candidate can only withdraw or respond within invited interview/offer stages; cannot forge scores or ownership
+        (resource.data.candidateId == request.auth.uid &&
+         isNotSuspended() &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'status',
+           'interviewStatus',
+           'offerStatus',
+           'offerAcceptedAt',
+           'updatedAt'
+         ]) &&
+         (
+           request.resource.data.status == 'WITHDRAWN' ||
+           (resource.data.status == 'INTERVIEW_SCHEDULED' &&
+            request.resource.data.status in ['INTERVIEW_SCHEDULED', 'REJECTED']) ||
+           (resource.data.status in ['OFFER_EXTENDED', 'SELECTED'] &&
+            request.resource.data.status in ['SELECTED', 'REJECTED'])
+         )) ||
+        // Owning company can manage applicant status/notes without altering identity ownership
+        (isCompany() && isNotSuspended() &&
+         resource.data.companyId == request.auth.uid &&
+         request.resource.data.companyId == resource.data.companyId &&
+         request.resource.data.candidateId == resource.data.candidateId &&
+         request.resource.data.jobId == resource.data.jobId) ||
+        isAdmin()
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 5. Question Banks collection
+    // =========================================================================
+    match /questionBanks/{bankId} {
+      allow read: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow create: if isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+    }
+
+    // =========================================================================
+    // 6. Questions collection (CONFIDENTIAL - contains answer keys)
+    // =========================================================================
+    match /questions/{questionId} {
+      // Never readable by candidates; Cloud Functions (Admin SDK) fetch & sanitize for exams
+      allow read: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow create: if isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+    }
+
+    // =========================================================================
+    // 7. Exams collection (CONFIDENTIAL - may contain embedded questions/answers)
+    // =========================================================================
+    match /exams/{examId} {
+      // Never readable by candidates; candidates read only their own /examAttempts
+      allow read: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow create: if isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+    }
+
+    // =========================================================================
+    // 8. Exam Attempts collection
+    // =========================================================================
+    match /examAttempts/{attemptId} {
+      allow read: if isAuthenticated() && (
+        resource.data.candidateId == request.auth.uid ||
+        resource.data.companyId == request.auth.uid ||
+        isAdmin()
+      );
+
+      // Only owning company (fallback) or Admin (or Admin SDK assignExamToApplication) may create attempts
+      allow create: if isAuthenticated() && (
+        (isCompany() && isNotSuspended()
+          && request.resource.data.companyId == request.auth.uid
+          && request.resource.data.status == 'INVITED'
+          && request.resource.data.get('score', 0) == 0
+          && request.resource.data.get('passed', false) == false) ||
+        isAdmin()
+      );
+
+      allow update: if isAuthenticated() && (
+        // Signed-in candidates may only autosave answer drafts & heartbeat while attempt is active;
+        // scores, status, violations, token, and expiry are server/company controlled
+        (resource.data.candidateId == request.auth.uid &&
+         isNotSuspended() &&
+         resource.data.status in ['INVITED', 'IN_PROGRESS'] &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'answers',
+           'lastHeartbeat',
+           'updatedAt'
+         ])) ||
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId
+          && request.resource.data.candidateId == resource.data.candidateId) ||
+        isAdmin()
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 9. Exam Violations collection (server-written via recordExamViolation CF)
+    // =========================================================================
+    match /examViolations/{violationId} {
+      allow read: if isAuthenticated() && (
+        resource.data.candidateId == request.auth.uid ||
+        resource.data.companyId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 10. Interviews collection
+    // =========================================================================
+    match /interviews/{interviewId} {
+      allow read: if isAuthenticated() && (
+        resource.data.candidateId == request.auth.uid ||
+        resource.data.companyId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        // Candidate may only confirm/decline slot and provide declineReason
+        (resource.data.candidateId == request.auth.uid &&
+         isNotSuspended() &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'selectedSlot',
+           'selectedSlotIndex',
+           'status',
+           'declineReason',
+           'updatedAt'
+         ]) &&
+         request.resource.data.status in ['CONFIRMED', 'DECLINED']) ||
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId
+          && request.resource.data.candidateId == resource.data.candidateId) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin() || (isCompany() && resource.data.companyId == request.auth.uid);
+    }
+
+    // =========================================================================
+    // 11. Job Offers collections (/offers and /jobOffers)
+    // =========================================================================
+    match /offers/{offerId} {
+      allow read: if isAuthenticated() && (
+        resource.data.candidateId == request.auth.uid ||
+        resource.data.companyId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        (resource.data.candidateId == request.auth.uid &&
+         isNotSuspended() &&
+         resource.data.status in ['PENDING_CANDIDATE', 'SENT'] &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'status',
+           'declineReason',
+           'respondedAt',
+           'acceptedAt',
+           'declinedAt',
+           'updatedAt'
+         ]) &&
+         request.resource.data.status in ['ACCEPTED', 'DECLINED']) ||
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId
+          && request.resource.data.candidateId == resource.data.candidateId) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin() || (isCompany() && resource.data.companyId == request.auth.uid);
+    }
+
+    match /jobOffers/{offerId} {
+      allow read: if isAuthenticated() && (
+        resource.data.candidateId == request.auth.uid ||
+        resource.data.companyId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        (resource.data.candidateId == request.auth.uid &&
+         isNotSuspended() &&
+         resource.data.status in ['PENDING_CANDIDATE', 'SENT'] &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'status',
+           'declineReason',
+           'respondedAt',
+           'acceptedAt',
+           'declinedAt',
+           'updatedAt'
+         ]) &&
+         request.resource.data.status in ['ACCEPTED', 'DECLINED']) ||
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId
+          && request.resource.data.candidateId == resource.data.candidateId) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin() || (isCompany() && resource.data.companyId == request.auth.uid);
+    }
+
+    // =========================================================================
+    // 12. Notifications collection
+    // =========================================================================
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && isNotSuspended()
+        && request.resource.data.userId is string
+        && request.resource.data.title is string
+        && request.resource.data.title.size() <= 200
+        && request.resource.data.body is string
+        && request.resource.data.body.size() <= 1000
+        && request.resource.data.isRead == false
+        && (!('data' in request.resource.data) ||
+            !(request.resource.data.data is map) ||
+            !('senderId' in request.resource.data.data) ||
+            request.resource.data.data.senderId == request.auth.uid);
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt', 'updatedAt']);
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // =========================================================================
+    // 12.5 Outbound Mail & Transactional Email Logs (Admin / Admin SDK only)
+    // =========================================================================
+    match /mail/{mailId} {
+      allow read, update, delete: if isAdmin();
+      allow create: if isAdmin() || (
+        isApprovedCompany() &&
+        request.resource.data.keys().hasOnly(['to', 'message', 'metadata', 'status', 'createdAt']) &&
+        request.resource.data.keys().hasAll(['to', 'message', 'metadata', 'status', 'createdAt']) &&
+        request.resource.data.status == 'QUEUED' &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.to is list &&
+        request.resource.data.to.size() == 1 &&
+        request.resource.data.to[0] is string &&
+        request.resource.data.to[0].size() <= 254 &&
+        request.resource.data.message is map &&
+        request.resource.data.message.keys().hasOnly(['subject', 'text', 'html']) &&
+        request.resource.data.message.subject is string &&
+        request.resource.data.message.subject.size() <= 500 &&
+        request.resource.data.message.text is string &&
+        request.resource.data.message.html is string &&
+        request.resource.data.metadata is map &&
+        request.resource.data.metadata.keys().hasOnly(['type', 'senderUid', 'candidateName', 'companyName', 'jobTitle']) &&
+        request.resource.data.metadata.type == 'JOB_OFFER' &&
+        request.resource.data.metadata.senderUid == request.auth.uid
+      );
+    }
+
+    match /sent_emails/{emailId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 13. Candidate Scorecards collection
+    // =========================================================================
+    match /scorecards/{scorecardId} {
+      allow read: if isAuthenticated() && (
+        resource.data.candidateId == request.auth.uid ||
+        resource.data.companyId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && (
+        (isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow update: if isAuthenticated() && (
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin() || (isCompany() && resource.data.companyId == request.auth.uid);
+    }
+
+    // =========================================================================
+    // 14. AI Candidate Summaries collection
+    // =========================================================================
+    match /aiSummaries/{summaryId} {
+      allow read: if isAuthenticated() && (
+        resource.data.companyId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && (
+        (isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow update: if isAuthenticated() && (
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+    }
+
+    // =========================================================================
+    // 15. AI Candidate Comparisons collection
+    // =========================================================================
+    match /candidateComparisons/{comparisonId} {
+      allow read, delete: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && (
+        (isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow update: if isAuthenticated() && (
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId) ||
+        isAdmin()
+      );
+    }
+
+    // =========================================================================
+    // 16. Take-Home Challenges collection
+    // =========================================================================
+    match /challenges/{challengeId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (
+        (isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow update: if isAuthenticated() && (
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+    }
+
+    // =========================================================================
+    // 17. Challenge Submissions collection
+    // =========================================================================
+    match /challengeSubmissions/{submissionId} {
+      allow read: if isAuthenticated() && (
+        resource.data.candidateId == request.auth.uid ||
+        resource.data.companyId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && (
+        (isNotSuspended()
+          && request.resource.data.candidateId == request.auth.uid
+          && request.resource.data.status == 'SUBMITTED'
+          && (!('score' in request.resource.data) || request.resource.data.score == null)
+          && (!('reviewedAt' in request.resource.data) || request.resource.data.reviewedAt == null)) ||
+        isAdmin()
+      );
+      allow update: if isAuthenticated() && (
+        // Candidate can only update submission links/notes before grading
+        (resource.data.candidateId == request.auth.uid &&
+         isNotSuspended() &&
+         resource.data.status == 'SUBMITTED' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'githubRepoUrl',
+           'liveDemoUrl',
+           'candidateNotes',
+           'submittedAt'
+         ])) ||
+        // Owning company grades submission without reassigning candidateId/companyId
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId
+          && request.resource.data.candidateId == resource.data.candidateId) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 18. Hiring Campaigns collection
+    // =========================================================================
+    match /hiringCampaigns/{campaignId} {
+      allow read: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && (
+        (isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow update: if isAuthenticated() && (
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        (isCompany() && resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+    }
+
+    // =========================================================================
+    // 19. Talent Pool Invites collection
+    // =========================================================================
+    match /talentPoolInvites/{inviteId} {
+      allow read: if isAuthenticated() && (
+        resource.data.candidateId == request.auth.uid ||
+        resource.data.companyId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && (
+        (isCompany() && isNotSuspended() && request.resource.data.companyId == request.auth.uid) ||
+        isAdmin()
+      );
+      allow update: if isAuthenticated() && (
+        (resource.data.candidateId == request.auth.uid &&
+         isNotSuspended() &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+         request.resource.data.status in ['ACCEPTED', 'DECLINED']) ||
+        (isCompany() && isNotSuspended()
+          && resource.data.companyId == request.auth.uid
+          && request.resource.data.companyId == resource.data.companyId
+          && request.resource.data.candidateId == resource.data.candidateId) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 19.5 Candidate Profiles collection
+    // =========================================================================
+    match /candidateProfiles/{profileId} {
+      allow read: if isAuthenticated() && (
+        isOwner(profileId) ||
+        isApprovedCompany() ||
+        isAdmin()
+      );
+      allow create, update: if isAuthenticated() && (
+        (isOwner(profileId) && isNotSuspended()) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (isOwner(profileId) || isAdmin());
+    }
+
+    // =========================================================================
+    // 20. Audit Logs collections (append-only, immutable from clients)
+    // =========================================================================
+    match /auditLogs/{logId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.actorId == request.auth.uid);
+      allow create: if isAdmin() && request.resource.data.actorId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /audit_logs/{logId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // =========================================================================
+    // 21. System Settings
+    // =========================================================================
+    match /systemSettings/{settingId} {
+      allow read, write: if isAdmin();
+    }
+
+    // =========================================================================
+    // 22. Community Posts collection
+    // =========================================================================
+    match /communityPosts/{postId} {
+      allow read: if isAuthenticated();
+
+      allow create: if isAuthenticated() && isNotSuspended()
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.get('likesCount', 0) == 0
+        && request.resource.data.get('commentsCount', 0) == 0
+        && request.resource.data.get('likedBy', []).size() == 0;
+
+      allow update: if isAuthenticated() && isNotSuspended() && (
+        // Admin full update
+        isAdmin() ||
+        // Author can edit post content/title/image/tags without tampering counters or authorId
+        (resource.data.authorId == request.auth.uid &&
+         request.resource.data.authorId == resource.data.authorId &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+           'content',
+           'title',
+           'imageUrl',
+           'tags',
+           'updatedAt'
+         ])) ||
+        // Any user can toggle ONLY their own UID in likedBy with matching likesCount
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likedBy', 'likesCount', 'updatedAt']) &&
+         request.resource.data.likedBy is list &&
+         request.resource.data.likesCount is int &&
+         request.resource.data.likesCount == request.resource.data.likedBy.size() &&
+         (
+           (!(request.auth.uid in resource.data.get('likedBy', [])) &&
+            (request.auth.uid in request.resource.data.likedBy) &&
+            request.resource.data.likedBy.hasAll(resource.data.get('likedBy', [])) &&
+            request.resource.data.likedBy.size() == resource.data.get('likedBy', []).size() + 1) ||
+           ((request.auth.uid in resource.data.get('likedBy', [])) &&
+            !(request.auth.uid in request.resource.data.likedBy) &&
+            resource.data.get('likedBy', []).hasAll(request.resource.data.likedBy) &&
+            request.resource.data.likedBy.size() == resource.data.get('likedBy', []).size() - 1)
+         )) ||
+        // Any user adding/deleting a comment can increment/decrement commentsCount by exactly 1
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['commentsCount', 'updatedAt']) &&
+         request.resource.data.commentsCount is int &&
+         request.resource.data.commentsCount >= 0 &&
+         (
+           request.resource.data.commentsCount == resource.data.get('commentsCount', 0) + 1 ||
+           request.resource.data.commentsCount == resource.data.get('commentsCount', 0) - 1
+         ))
+      );
+
+      allow delete: if isAuthenticated() && (
+        resource.data.authorId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // =========================================================================
+    // 23. Community Comments collection
+    // =========================================================================
+    match /communityComments/{commentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isNotSuspended() && request.resource.data.authorId == request.auth.uid;
+      allow update: if isAuthenticated() && (
+        (resource.data.authorId == request.auth.uid &&
+         isNotSuspended() &&
+         request.resource.data.authorId == resource.data.authorId &&
+         request.resource.data.postId == resource.data.postId) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        resource.data.authorId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // =========================================================================
+    // 24. Company Career Pages collection
+    // =========================================================================
+    match /careerPages/{companyId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (
+        (isOwner(companyId) && isNotSuspended()) ||
+        isAdmin()
+      );
+    }
+  }
+}

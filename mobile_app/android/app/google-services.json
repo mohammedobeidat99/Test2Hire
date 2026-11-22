@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "326304038955",
+    "project_id": "test2here-72346",
+    "storage_bucket": "test2here-72346.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:326304038955:android:152a0f1a99a8e02a14ea6e",
+        "android_client_info": {
+          "package_name": "com.test2hire.mobile_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "326304038955-ogibph6sdueerpp068tktcnsfprbvb7n.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.test2hire.mobile_app",
+            "certificate_hash": "e7d3833de27f87190c837fe3018265defa144b6e"
+          }
+        },
+        {
+          "client_id": "326304038955-ihh7dbdh385re9ve4e6u93u46qnlvrps.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCQjm1VOnZVVyO6Dusk_k5VpWMNA59jykM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "326304038955-ihh7dbdh385re9ve4e6u93u46qnlvrps.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "326304038955-og8p6fq6fpph8lphgod6q4fntieh25e8.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.test2hire.mobileApp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
