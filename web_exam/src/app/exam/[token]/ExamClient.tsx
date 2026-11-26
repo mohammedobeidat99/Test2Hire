@@ -8,7 +8,6 @@ import {
   reportViolation,
   submitCandidateExam,
   saveAnswerDraft,
-  syncProctoringReport,
   writeLocalDraft,
   isDemoOrTestToken,
   ExamSessionError,
@@ -20,7 +19,6 @@ import {
   SanitizedQuestion,
   ExamSubmissionResult,
   ProctoringReport,
-  ProctoringSnapshot,
   ProctoringViolationEvent,
 } from "@/types/exam";
 import {
@@ -33,14 +31,7 @@ import {
   ChevronRight,
   ChevronLeft,
   Maximize,
-  Minimize2,
-  Maximize2,
-  Move,
   Send,
-  Camera,
-  CameraOff,
-  Mic,
-  MicOff,
   Lock,
   AlertOctagon,
   Globe,
@@ -231,75 +222,6 @@ const ExamCountdownTimer = memo(function ExamCountdownTimer({
   );
 });
 
-const LiveMicMeter = memo(function LiveMicMeter({
-  analyserRef,
-  active,
-  compact = false,
-}: {
-  analyserRef: React.MutableRefObject<AnalyserNode | null>;
-  active: boolean;
-  compact?: boolean;
-}) {
-  const [level, setLevel] = useState(0);
-
-  useEffect(() => {
-    if (!active) {
-      setLevel(0);
-      return;
-    }
-    const buffer = new Uint8Array(128);
-    const id = setInterval(() => {
-      const analyser = analyserRef.current;
-      if (!analyser) return;
-      try {
-        analyser.getByteTimeDomainData(buffer);
-        let sumSq = 0;
-        for (let i = 0; i < buffer.length; i++) {
-          const norm = (buffer[i] - 128) / 128;
-          sumSq += norm * norm;
-        }
-        const rms = Math.sqrt(sumSq / buffer.length);
-        const pct = Math.min(100, Math.round(rms * 420));
-        setLevel(pct);
-      } catch {
-        // ignore audio read error
-      }
-    }, 180);
-    return () => clearInterval(id);
-  }, [active, analyserRef]);
-
-  if (compact) {
-    return (
-      <div className="flex items-end gap-0.5 h-3" aria-label={`Mic level ${level}%`}>
-        {[15, 35, 60, 85].map((thresh, i) => (
-          <span
-            key={i}
-            className={`w-0.5 rounded-full transition-colors ${
-              !active
-                ? "bg-red-500/40"
-                : level >= thresh
-                ? "bg-emerald-400"
-                : "bg-slate-600/50"
-            }`}
-            style={{ height: `${(i + 1) * 3}px` }}
-          />
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div className="w-full h-2 rounded-full bg-slate-800/70 overflow-hidden border border-slate-700/60">
-      <div
-        className={`h-full transition-all duration-150 ${
-          !active ? "bg-red-500/40" : level > 20 ? "bg-emerald-500" : "bg-indigo-500"
-        }`}
-        style={{ width: `${active ? Math.max(6, level) : 0}%` }}
-      />
-    </div>
-  );
-});
-
 export default function ExamClient() {
   const params = useParams();
   const { isRTL, isDark, toggleLang, toggleTheme } = usePortalPreferences();
@@ -318,24 +240,9 @@ export default function ExamClient() {
   const [sessionError, setSessionError] = useState<ExamSessionError | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Security Gate & Proctoring HUD State
+  // Security Gate State
   const [hasPassedSecurityCheck, setHasPassedSecurityCheck] = useState(false);
   const [isStartingGate, setIsStartingGate] = useState(false);
-  const [isTestingHardware, setIsTestingHardware] = useState(false);
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const [isMicActive, setIsMicActive] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
-  const [isHudMinimized, setIsHudMinimized] = useState(false);
-  const [hudCorner, setHudCorner] = useState<"br" | "bl" | "tr" | "tl">("br");
-  const [hudPos, setHudPos] = useState<{ left: number; top: number } | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const micAnalyserRef = useRef<AnalyserNode | null>(null);
-  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const hudCardRef = useRef<HTMLDivElement | null>(null);
-  const dragOriginRef = useRef<{ startX: number; startY: number; origLeft: number; origTop: number } | null>(null);
-  const audioPeakLevelRef = useRef<number>(0);
-  const proctoringSnapshotsRef = useRef<ProctoringSnapshot[]>([]);
   const violationEventsRef = useRef<ProctoringViolationEvent[]>([]);
 
   // Exam Progress State
@@ -381,19 +288,6 @@ export default function ExamClient() {
     answersRef.current = answers;
   }, [answers]);
 
-  // Callback ref immediately attaches live MediaStream whenever <video> mounts/un-minimizes
-  const attachVideoRef = useCallback((el: HTMLVideoElement | null) => {
-    videoRef.current = el;
-    const stream = mediaStreamRef.current;
-    if (el && stream) {
-      if (el.srcObject !== stream) {
-        el.srcObject = stream;
-      }
-      el.muted = true;
-      el.play().catch(() => {});
-    }
-  }, []);
-
   // Sound generator for violation beep using a single reused Web Audio API context
   const playAlertSound = useCallback(() => {
     try {
@@ -426,158 +320,19 @@ export default function ExamClient() {
     }
   }, []);
 
-  // Attach media stream to <video> whenever the view transitions or stream state changes
-  useEffect(() => {
-    const videoEl = videoRef.current;
-    const stream = mediaStreamRef.current;
-    if (videoEl && stream) {
-      if (videoEl.srcObject !== stream) {
-        videoEl.srcObject = stream;
-      }
-      videoEl.muted = true;
-      videoEl.play().catch(() => {});
-    }
-  }, [hasPassedSecurityCheck, isCameraActive, isHudMinimized]);
-
-  // Drag-and-drop pointer listeners for movable webcam HUD
-  useEffect(() => {
-    const handlePointerMove = (e: PointerEvent) => {
-      const origin = dragOriginRef.current;
-      const card = hudCardRef.current;
-      if (!origin || !card) return;
-      const rect = card.getBoundingClientRect();
-      const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
-      const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
-      const nextLeft = Math.min(maxLeft, Math.max(8, origin.origLeft + (e.clientX - origin.startX)));
-      const nextTop = Math.min(maxTop, Math.max(8, origin.origTop + (e.clientY - origin.startY)));
-      setHudPos({ left: nextLeft, top: nextTop });
-    };
-    const handlePointerUp = () => {
-      dragOriginRef.current = null;
-    };
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    window.addEventListener("pointercancel", handlePointerUp);
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-      window.removeEventListener("pointercancel", handlePointerUp);
-    };
-  }, []);
-
-  const handleHudDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
-    const target = e.target as HTMLElement | null;
-    if (target?.closest("button")) return;
-    const card = hudCardRef.current;
-    if (!card) return;
-    const rect = card.getBoundingClientRect();
-    dragOriginRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      origLeft: rect.left,
-      origTop: rect.top,
-    };
-  };
-
-  // Capture low-bandwidth webcam proof snapshot (160x120 JPEG)
-  const captureWebcamSnapshot = useCallback((label: string): string | null => {
-    try {
-      const videoEl = videoRef.current;
-      if (!videoEl || videoEl.readyState < 2 || !videoEl.videoWidth) return null;
-      const canvas = document.createElement("canvas");
-      canvas.width = 160;
-      canvas.height = 120;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return null;
-      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.45);
-      if (!dataUrl.startsWith("data:image/") || dataUrl.length > 150000) return null;
-      const snap: ProctoringSnapshot = {
-        label,
-        timestamp: new Date().toISOString(),
-        imageDataUrl: dataUrl,
-      };
-      proctoringSnapshotsRef.current = [...proctoringSnapshotsRef.current, snap].slice(-10);
-      return dataUrl;
-    } catch {
-      return null;
-    }
-  }, []);
-
   const buildProctoringReport = useCallback((): ProctoringReport => {
     return {
-      cameraVerified: Boolean(
-        mediaStreamRef.current?.getVideoTracks().some((t) => t.enabled && t.readyState === "live")
-      ),
-      micVerified: Boolean(
-        mediaStreamRef.current?.getAudioTracks().some((t) => t.enabled && t.readyState === "live")
-      ),
-      audioPeakLevel: audioPeakLevelRef.current,
-      snapshots: proctoringSnapshotsRef.current.slice(-10),
+      cameraVerified: false,
+      micVerified: false,
+      audioPeakLevel: 0,
+      snapshots: [],
       violationEvents: violationEventsRef.current.slice(-20),
     };
   }, []);
 
-  // Periodic webcam snapshot + audio peak monitor while exam is running
-  useEffect(() => {
-    if (!hasPassedSecurityCheck || !session?.proctoringEnabled || submissionResult || isTerminated) {
-      return;
-    }
-    const peakBuffer = new Uint8Array(128);
-    const audioSampleId = setInterval(() => {
-      const analyser = micAnalyserRef.current;
-      if (!analyser) return;
-      try {
-        analyser.getByteTimeDomainData(peakBuffer);
-        let sumSq = 0;
-        for (let i = 0; i < peakBuffer.length; i++) {
-          const norm = (peakBuffer[i] - 128) / 128;
-          sumSq += norm * norm;
-        }
-        const level = Math.min(100, Math.round(Math.sqrt(sumSq / peakBuffer.length) * 420));
-        if (level > audioPeakLevelRef.current) {
-          audioPeakLevelRef.current = level;
-        }
-      } catch {
-        // ignore
-      }
-    }, 1000);
-
-    const snapshotSyncId = setInterval(() => {
-      if (isCameraActive) {
-        captureWebcamSnapshot("PERIODIC_CHECK");
-      }
-      void syncProctoringReport(token, buildProctoringReport());
-    }, 60000);
-
-    return () => {
-      clearInterval(audioSampleId);
-      clearInterval(snapshotSyncId);
-    };
-  }, [
-    hasPassedSecurityCheck,
-    session?.proctoringEnabled,
-    submissionResult,
-    isTerminated,
-    isCameraActive,
-    token,
-    captureWebcamSnapshot,
-    buildProctoringReport,
-  ]);
-
-  // Clean up media streams, audio context, and pending timers on unmount
+  // Clean up audio context and pending timers on unmount
   useEffect(() => {
     return () => {
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      }
-      if (micSourceRef.current) {
-        try {
-          micSourceRef.current.disconnect();
-        } catch {
-          // ignore
-        }
-      }
       if (graceTimerRef.current) {
         clearInterval(graceTimerRef.current);
       }
@@ -592,143 +347,6 @@ export default function ExamClient() {
       }
     };
   }, []);
-
-  // 1. Initialize Media Stream (Webcam & Mic + Live Audio Analyser)
-  const initWebcamStream = useCallback(async () => {
-    try {
-      setCameraError(null);
-      if (
-        mediaStreamRef.current &&
-        mediaStreamRef.current.getVideoTracks().some((t) => t.enabled && t.readyState === "live") &&
-        mediaStreamRef.current.getAudioTracks().some((t) => t.enabled && t.readyState === "live")
-      ) {
-        const existing = mediaStreamRef.current;
-        if (videoRef.current) {
-          videoRef.current.srcObject = existing;
-          videoRef.current.muted = true;
-          videoRef.current.play().catch(() => {});
-        }
-        return true;
-      }
-
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      }
-      if (micSourceRef.current) {
-        try {
-          micSourceRef.current.disconnect();
-        } catch {
-          // ignore
-        }
-        micSourceRef.current = null;
-      }
-      micAnalyserRef.current = null;
-
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setCameraError(
-          isRTL
-            ? "أجهزة الكاميرا والميكروفون غير متوفرة في هذا المتصفح أو البيئة (يتطلب اتصالاً آمناً HTTPS أو localhost)."
-            : "Webcam/Audio devices are not accessible in this browser environment (requires HTTPS or localhost)."
-        );
-        return false;
-      }
-
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-      } catch (constraintErr: any) {
-        if (constraintErr?.name === "OverconstrainedError" || constraintErr?.name === "ConstraintNotSatisfiedError") {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        } else {
-          throw constraintErr;
-        }
-      }
-
-      mediaStreamRef.current = stream;
-      const vidLive = stream.getVideoTracks().some((t) => t.enabled && t.readyState === "live");
-      const audLive = stream.getAudioTracks().some((t) => t.enabled && t.readyState === "live");
-      setIsCameraActive(vidLive);
-      setIsMicActive(audLive);
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.muted = true;
-        videoRef.current.play().catch(() => {});
-      }
-
-      // Bind live microphone AudioContext AnalyserNode so mic meter moves cleanly
-      try {
-        const AudioContextClass =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (AudioContextClass && audLive) {
-          if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
-            audioCtxRef.current = new AudioContextClass();
-          }
-          const ctx = audioCtxRef.current;
-          if (ctx.state === "suspended") {
-            await ctx.resume().catch(() => {});
-          }
-          const src = ctx.createMediaStreamSource(stream);
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 256;
-          src.connect(analyser);
-          micSourceRef.current = src;
-          micAnalyserRef.current = analyser;
-        }
-      } catch {
-        // Ignore AudioContext restriction if blocked before gesture
-      }
-
-      stream.getVideoTracks().forEach((track) => {
-        track.onended = () => {
-          setIsCameraActive(false);
-          if (hasStartedRef.current) {
-            handleViolationRef.current(
-              "CAMERA_DISCONNECTED",
-              isRTL ? "تم إيقاف أو فصل الكاميرا أثناء الاختبار." : "Webcam video feed was disconnected or disabled."
-            );
-          }
-        };
-      });
-
-      stream.getAudioTracks().forEach((track) => {
-        track.onended = () => {
-          setIsMicActive(false);
-          if (hasStartedRef.current) {
-            handleViolationRef.current(
-              "MIC_DISCONNECTED",
-              isRTL ? "تم كتم أو فصل الميكروفون أثناء الاختبار." : "Microphone audio feed was disconnected or muted."
-            );
-          }
-        };
-      });
-
-      return vidLive;
-    } catch (err: any) {
-      console.warn("Camera/Mic access rejected:", err);
-      const errName = String(err?.name || "");
-      let msg = isRTL
-        ? "صلاحيات الكاميرا والميكروفون مطلوبة للامتثال لبروتوكول المراقبة. يرجى السماح بالوصول من إعدادات المتصفح ثم إعادة المحاولة."
-        : "Camera and Microphone permissions are required for the proctoring security protocol. Please allow access in your browser and try again.";
-      if (errName === "NotFoundError" || errName === "DevicesNotFoundError") {
-        msg = isRTL
-          ? "لم يتم العثور على كاميرا أو ميكروفون متصل بهذا الجهاز."
-          : "No working camera or microphone was detected on this device.";
-      } else if (errName === "NotReadableError" || errName === "TrackStartError") {
-        msg = isRTL
-          ? "الكاميرا أو الميكروفون قيد الاستخدام في تطبيق آخر (مثل Zoom/Teams). أغلقه ثم أعد المحاولة."
-          : "Camera or microphone is already in use by another app. Close it and retry.";
-      }
-      setCameraError(msg);
-      setIsCameraActive(false);
-      setIsMicActive(false);
-      return false;
-    }
-  }, [isRTL]);
 
   // 2. Load Exam Session
   useEffect(() => {
@@ -840,9 +458,6 @@ export default function ExamClient() {
       }
 
       try {
-        if (session?.proctoringEnabled && isCameraActive) {
-          captureWebcamSnapshot("FINAL_SUBMIT");
-        }
         const proctoringReport = session?.proctoringEnabled
           ? buildProctoringReport()
           : undefined;
@@ -855,9 +470,6 @@ export default function ExamClient() {
         setSubmissionResult(result);
         if (typeof document !== "undefined" && document.fullscreenElement) {
           document.exitFullscreen().catch(() => {});
-        }
-        if (mediaStreamRef.current) {
-          mediaStreamRef.current.getTracks().forEach((t) => t.stop());
         }
       } catch (err) {
         const classified =
@@ -894,11 +506,9 @@ export default function ExamClient() {
       token,
       session?.attemptId,
       session?.proctoringEnabled,
-      isCameraActive,
       submissionResult,
       isTerminated,
       isRTL,
-      captureWebcamSnapshot,
       buildProctoringReport,
     ]
   );
@@ -961,14 +571,13 @@ export default function ExamClient() {
       playAlertSound();
 
       try {
-        const snapshotUrl = captureWebcamSnapshot(type);
         violationEventsRef.current = [
           ...violationEventsRef.current,
           { type, details, timestamp: new Date().toISOString() },
         ].slice(-20);
         const summary = buildProctoringReport();
 
-        const res = await reportViolation(token, type, details, snapshotUrl, summary);
+        const res = await reportViolation(token, type, details, null, summary);
         setViolations(res.violationCount);
 
         if (res.terminated) {
@@ -979,9 +588,6 @@ export default function ExamClient() {
           }
           if (typeof document !== "undefined" && document.fullscreenElement) {
             document.exitFullscreen().catch(() => {});
-          }
-          if (mediaStreamRef.current) {
-            mediaStreamRef.current.getTracks().forEach((t) => t.stop());
           }
         } else {
           setWarningMessage(
@@ -1003,7 +609,6 @@ export default function ExamClient() {
       token,
       playAlertSound,
       isRTL,
-      captureWebcamSnapshot,
       buildProctoringReport,
     ]
   );
@@ -1219,29 +824,14 @@ export default function ExamClient() {
     }
   };
 
-  // Test Camera & Mic right inside the Security Gate preview
-  const handleTestHardware = async () => {
-    if (isTestingHardware) return;
-    setIsTestingHardware(true);
-    try {
-      await initWebcamStream();
-    } finally {
-      setIsTestingHardware(false);
-    }
-  };
-
   // Complete Security Gate Check & Start Exam
   const handleCompleteSecurityGate = async () => {
     if (isStartingGate) return;
     setIsStartingGate(true);
     try {
       if (session?.proctoringEnabled) {
-        const hasCamera = await initWebcamStream();
-        if (!hasCamera) return;
-        captureWebcamSnapshot("GATE_START");
         proctoringReadyAtRef.current = Date.now() + 800;
         await requestFullscreen();
-        void syncProctoringReport(token, buildProctoringReport());
       }
       setHasPassedSecurityCheck(true);
       hasStartedRef.current = true;
@@ -1725,28 +1315,6 @@ export default function ExamClient() {
                     : "bg-slate-50 border-slate-200 text-slate-700"
                 }`}
               >
-                <Camera className="w-5 h-5 text-indigo-500 flex-shrink-0 mt-0.5" />
-                <div>
-                  <div className={`font-semibold ${isDark ? "text-white" : "text-slate-900"}`}>
-                    {isRTL
-                      ? "مراقبة الكاميرا والميكروفون المباشرة"
-                      : "Live Webcam & Microphone Monitoring"}
-                  </div>
-                  <div className="text-xs text-slate-400 mt-1 leading-relaxed">
-                    {isRTL
-                      ? "يتطلب الاختبار بقاء الكاميرا والميكروفون قيد التشغيل طوال مدة التقييم لتوثيق هوية المرشح."
-                      : "Camera and microphone must remain active throughout the assessment to verify candidate identity."}
-                  </div>
-                </div>
-              </div>
-
-              <div
-                className={`p-4 rounded-2xl border flex items-start gap-3 ${
-                  isDark
-                    ? "bg-slate-950/80 border-slate-800 text-slate-300"
-                    : "bg-slate-50 border-slate-200 text-slate-700"
-                }`}
-              >
                 <Maximize className="w-5 h-5 text-indigo-500 flex-shrink-0 mt-0.5" />
                 <div>
                   <div className={`font-semibold ${isDark ? "text-white" : "text-slate-900"}`}>
@@ -1783,94 +1351,6 @@ export default function ExamClient() {
                   </div>
                 </div>
               </div>
-
-              {/* Live Hardware Check Preview Box */}
-              <div
-                className={`p-4 rounded-2xl border space-y-3 ${
-                  isDark
-                    ? "bg-slate-950/90 border-indigo-500/30 text-slate-200"
-                    : "bg-indigo-50/50 border-indigo-200 text-slate-800"
-                }`}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-xs font-bold flex items-center gap-2">
-                    <Camera className="w-4 h-4 text-indigo-500" />
-                    <span>
-                      {isRTL
-                        ? "المعاينة المباشرة للكاميرا والمايكروفون"
-                        : "Live Camera & Microphone Hardware Check"}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isTestingHardware}
-                    onClick={handleTestHardware}
-                    className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isTestingHardware ? "animate-spin" : ""}`} />
-                    <span>
-                      {isRTL
-                        ? isCameraActive
-                          ? "إعادة فحص الكاميرا والمايك"
-                          : "تشغيل وفحص الكاميرا والمايكروفون"
-                        : isCameraActive
-                        ? "Retest Camera & Mic"
-                        : "Activate & Test Camera + Mic"}
-                    </span>
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
-                  <div className="relative w-full aspect-video rounded-xl overflow-hidden bg-slate-950 border border-slate-700/70">
-                    <video
-                      ref={attachVideoRef}
-                      onLoadedMetadata={(e) => {
-                        e.currentTarget.play().catch(() => {});
-                      }}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="w-full h-full object-cover"
-                      style={{ transform: "scaleX(-1)" }}
-                    />
-                    {!isCameraActive && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/85 text-slate-400 text-[11px] p-2 text-center gap-1">
-                        <CameraOff className="w-5 h-5 text-slate-500" />
-                        <span>
-                          {isRTL
-                            ? "اضغط على «تشغيل وفحص الكاميرا» لعرض صورتك المباشرة"
-                            : "Click Activate & Test to verify your webcam"}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-2.5 text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400">{isRTL ? "حالة الكاميرا:" : "Camera:"}</span>
-                      <span className={`font-bold ${isCameraActive ? "text-emerald-500" : "text-amber-500"}`}>
-                        {isCameraActive
-                          ? isRTL ? "متصلة وتعمل بنجاح" : "Active & Ready"
-                          : isRTL ? "في انتظار التفعيل" : "Waiting activation"}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-400">{isRTL ? "حالة الميكروفون:" : "Microphone:"}</span>
-                      <span className={`font-bold ${isMicActive ? "text-emerald-500" : "text-amber-500"}`}>
-                        {isMicActive
-                          ? isRTL ? "يعمل (تحدث لاختبار الصوت)" : "Active (Speak to test)"
-                          : isRTL ? "في انتظار التفعيل" : "Waiting activation"}
-                      </span>
-                    </div>
-                    <LiveMicMeter analyserRef={micAnalyserRef} active={isMicActive} />
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
-                      {isRTL
-                        ? "تلتقط المنصة لقطات تحقق دورية من الكاميرا وسجل المخالفات (الخروج أو تبديل التبويب) وترفقها تلقائياً في سجل تقديمك لدى الشركة. كما يمكنك سحب مربع الكاميرا وتحريكه لأي مكان على الشاشة أثناء الامتحان."
-                        : "Periodic webcam snapshots and tab/fullscreen alerts are attached to your employer's proctoring record. You can freely drag or dock the camera box anywhere on screen during the exam."}
-                    </p>
-                  </div>
-                </div>
-              </div>
             </div>
           ) : (
             <div
@@ -1882,42 +1362,9 @@ export default function ExamClient() {
             >
               <p className="leading-relaxed">
                 {isRTL
-                  ? "هذا التقييم قياسي (لا يتطلب كاميرا أو وضع ملء الشاشة). تأكد من استقرار اتصالك بالإنترنت قبل البدء."
-                  : "This is a standard assessment (no webcam or fullscreen lock required). Ensure a stable internet connection before starting."}
+                  ? "هذا التقييم قياسي (لا يتطلب وضع ملء الشاشة). تأكد من استقرار اتصالك بالإنترنت قبل البدء."
+                  : "This is a standard assessment (no fullscreen lock required). Ensure a stable internet connection before starting."}
               </p>
-            </div>
-          )}
-
-          {cameraError && (
-            <div
-              className={`mb-6 p-4 rounded-2xl border text-xs flex flex-col gap-2 ${
-                isDark
-                  ? "bg-red-950/50 border-red-800 text-red-200"
-                  : "bg-red-50 border-red-200 text-red-800"
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="w-5 h-5 flex-shrink-0 text-red-500 mt-0.5" />
-                <span className="leading-relaxed">{cameraError}</span>
-              </div>
-              {isDemo && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    proctoringReadyAtRef.current = Date.now() + 800;
-                    await requestFullscreen();
-                    setHasPassedSecurityCheck(true);
-                    hasStartedRef.current = true;
-                  }}
-                  className="mt-2 py-2 px-4 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/40 text-amber-400 rounded-xl font-medium text-xs transition-colors self-start flex items-center gap-2 cursor-pointer"
-                >
-                  <span>
-                    {isRTL
-                      ? "تخطي فحص الكاميرا (متاح للوضع التجريبي فقط)"
-                      : "Skip camera check (Demo / Sandbox mode only)"}
-                  </span>
-                </button>
-              )}
             </div>
           )}
 
@@ -1987,8 +1434,8 @@ export default function ExamClient() {
                   : "Initializing Assessment..."
                 : proctored
                 ? isRTL
-                  ? "تفعيل الكاميرا وبدء الاختبار المحمي"
-                  : "Enable Camera & Start Proctored Exam"
+                  ? "بدء الاختبار المحمي الآن"
+                  : "Start Proctored Exam"
                 : isRTL
                 ? "بدء الاختبار الآن"
                 : "Start Assessment Now"}
@@ -2201,11 +1648,7 @@ export default function ExamClient() {
       </div>
 
       {/* 5. Main Examination Area */}
-      <main
-        className={`flex-1 max-w-4xl w-full mx-auto p-3 sm:p-6 flex flex-col z-10 ${
-          session?.proctoringEnabled ? "pb-44 sm:pb-24" : "pb-8"
-        }`}
-      >
+      <main className="flex-1 max-w-4xl w-full mx-auto p-3 sm:p-6 pb-8 flex flex-col z-10">
         {/* Visible Submit Error Banner */}
         {submitError && (
           <div
@@ -2561,136 +2004,6 @@ export default function ExamClient() {
           </div>
         ) : null}
       </main>
-
-      {/* 6. Draggable & Dockable Live Webcam Proctoring HUD (Proctoring Only) */}
-      {session?.proctoringEnabled && (
-        <div
-          ref={hudCardRef}
-          style={hudPos ? { left: `${hudPos.left}px`, top: `${hudPos.top}px` } : undefined}
-          className={`fixed z-40 border p-2 rounded-2xl shadow-2xl backdrop-blur-md flex flex-col items-center select-none ${
-            hudPos
-              ? ""
-              : hudCorner === "br"
-              ? "bottom-3 right-3"
-              : hudCorner === "bl"
-              ? "bottom-3 left-3"
-              : hudCorner === "tr"
-              ? "top-20 right-3"
-              : "top-20 left-3"
-          } ${isHudMinimized ? "w-48" : "w-48 sm:w-60"} ${
-            isDark
-              ? "bg-slate-950/95 border-slate-700 text-slate-200"
-              : "bg-white/95 border-slate-300 text-slate-800"
-          }`}
-        >
-          {/* Draggable Handle & 4-Corner Quick Dock Controls */}
-          <div
-            onPointerDown={handleHudDragStart}
-            className="w-full flex items-center justify-between gap-1 px-1 pb-1.5 mb-1 border-b border-slate-700/30 cursor-grab active:cursor-grabbing touch-none"
-            title={isRTL ? "اسحب لتحريك نافذة الكاميرا في أي اتجاه" : "Drag to move webcam box anywhere"}
-          >
-            <div className="flex items-center gap-1 text-[10px] font-semibold text-slate-400">
-              <Move className="w-3 h-3 text-indigo-400" />
-              <span>{isRTL ? "اسحب للتحريك" : "Drag"}</span>
-            </div>
-            <div className="flex items-center gap-0.5 text-[10px]">
-              {(
-                [
-                  { id: "tl", label: "↖", title: "Top Left" },
-                  { id: "tr", label: "↗", title: "Top Right" },
-                  { id: "bl", label: "↙", title: "Bottom Left" },
-                  { id: "br", label: "↘", title: "Bottom Right" },
-                ] as const
-              ).map((pos) => (
-                <button
-                  key={pos.id}
-                  type="button"
-                  onClick={() => {
-                    setHudPos(null);
-                    setHudCorner(pos.id);
-                  }}
-                  title={pos.title}
-                  className={`w-5 h-5 rounded flex items-center justify-center cursor-pointer transition-colors ${
-                    !hudPos && hudCorner === pos.id
-                      ? "bg-indigo-600 text-white"
-                      : "hover:bg-slate-700/30 text-slate-400"
-                  }`}
-                >
-                  {pos.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {!isHudMinimized && (
-            <div className="relative w-full aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 mb-2">
-              <video
-                ref={attachVideoRef}
-                onLoadedMetadata={(e) => {
-                  e.currentTarget.play().catch(() => {});
-                }}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-cover"
-                style={{ transform: "scaleX(-1)" }}
-              />
-              <div className="absolute top-1.5 start-1.5 flex items-center gap-1.5 bg-black/70 backdrop-blur-sm px-2 py-0.5 rounded-full text-[10px] font-bold text-emerald-400 border border-emerald-500/30">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
-                <span>{isRTL ? "بث مباشر" : "LIVE CAM"}</span>
-              </div>
-
-              {!isCameraActive && (
-                <div className="absolute inset-0 bg-red-950/90 flex flex-col items-center justify-center text-red-200 text-[11px] p-2 text-center gap-1">
-                  <CameraOff className="w-5 h-5" />
-                  <span>
-                    {isRTL ? "الكاميرا غير متصلة" : "Camera Disconnected"}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void initWebcamStream()}
-                    className="mt-1 px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold cursor-pointer"
-                  >
-                    {isRTL ? "إعادة التشغيل" : "Reconnect"}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="w-full flex items-center justify-between px-1 text-[11px] font-mono">
-            <div className="flex items-center gap-1 text-emerald-500">
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>{isRTL ? "مراقبة نشطة" : "Proctor On"}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <LiveMicMeter analyserRef={micAnalyserRef} active={isMicActive} compact />
-              {isMicActive ? (
-                <Mic className="w-3.5 h-3.5 text-emerald-500" />
-              ) : (
-                <MicOff className="w-3.5 h-3.5 text-red-500" />
-              )}
-              {isCameraActive ? (
-                <Camera className="w-3.5 h-3.5 text-emerald-500" />
-              ) : (
-                <CameraOff className="w-3.5 h-3.5 text-red-500" />
-              )}
-              <button
-                type="button"
-                onClick={() => setIsHudMinimized((v) => !v)}
-                aria-label={isHudMinimized ? "Expand camera" : "Minimize camera"}
-                className="p-0.5 rounded hover:bg-slate-700/30 cursor-pointer"
-              >
-                {isHudMinimized ? (
-                  <Maximize2 className="w-3.5 h-3.5" />
-                ) : (
-                  <Minimize2 className="w-3.5 h-3.5" />
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

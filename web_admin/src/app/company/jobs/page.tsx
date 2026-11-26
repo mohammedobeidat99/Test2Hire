@@ -33,8 +33,11 @@ import {
 
 export default function CompanyJobsPage() {
   const { t, isRTL, language, companyInfo } = useCompany();
-  const isCompanyApproved =
-    (companyInfo?.verificationStatus || "PENDING").toUpperCase() === "APPROVED";
+  const verificationStatusUpper = (companyInfo?.verificationStatus || "").toUpperCase();
+  const isAccountSuspended = verificationStatusUpper === "SUSPENDED";
+  const canPublishJobs =
+    !isAccountSuspended &&
+    (Boolean(auth.currentUser?.emailVerified) || verificationStatusUpper === "APPROVED");
 
   const [rawJobs, setRawJobs] = useState<CompanyJob[]>([]);
   const [applicants, setApplicants] = useState<CompanyApplicant[]>([]);
@@ -219,7 +222,7 @@ export default function CompanyJobsPage() {
         });
         setActionMessage({ type: "success", text: t("success") });
       } else {
-        const initialStatus = isCompanyApproved ? "PUBLISHED" : "DRAFT";
+        const initialStatus = canPublishJobs ? "PUBLISHED" : "DRAFT";
         await createCompanyJob({
           companyId: auth.currentUser.uid,
           companyName: companyInfo?.name || auth.currentUser.displayName || "Hiring Company",
@@ -240,11 +243,15 @@ export default function CompanyJobsPage() {
         });
         setActionMessage({
           type: "success",
-          text: isCompanyApproved
+          text: canPublishJobs
             ? t("success")
+            : isAccountSuspended
+            ? isRTL
+              ? "تم حفظ الوظيفة كمسودة لأن حساب الشركة موقوف مؤقتاً."
+              : "Job saved as Draft because your company account is suspended."
             : isRTL
-            ? "تم حفظ الوظيفة كمسودة لأن حساب الشركة بانتظار اعتماد الإدارة."
-            : "Job saved as Draft while your company verification is pending admin approval.",
+            ? "تم حفظ الوظيفة كمسودة. يرجى تأكيد بريدك الإلكتروني لنشرها."
+            : "Job saved as Draft. Verify your email address to publish it.",
         });
       }
 
@@ -260,12 +267,16 @@ export default function CompanyJobsPage() {
   };
 
   const handleStatusToggle = async (jobId: string, newStatus: any) => {
-    if (newStatus === "PUBLISHED" && !isCompanyApproved) {
+    if (newStatus === "PUBLISHED" && !canPublishJobs) {
       setActionMessage({
         type: "error",
-        text: isRTL
-          ? "لا يمكن نشر الوظيفة قبل اعتماد حساب الشركة من إدارة المنصة."
-          : "Jobs cannot be published until your company verification is approved by an administrator.",
+        text: isAccountSuspended
+          ? isRTL
+            ? "لا يمكن نشر الوظيفة لأن حساب الشركة موقوف مؤقتاً."
+            : "Jobs cannot be published while your company account is suspended."
+          : isRTL
+          ? "يرجى تأكيد البريد الإلكتروني لحساب الشركة أولاً لتتمكن من نشر الوظيفة."
+          : "Please verify your company email address first to publish jobs.",
       });
       return;
     }

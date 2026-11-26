@@ -484,285 +484,457 @@ class CommunityPostCard extends StatelessWidget {
 
 /// Open the professional comments bottom sheet
 void showCommunityCommentsSheet(BuildContext context, CommunityPost post) {
-  final communityProvider = context.read<CommunityProvider>();
-  communityProvider.listenComments(post.id);
-  final commentController = TextEditingController();
-
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
+    useSafeArea: true,
     backgroundColor: Colors.white,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
     ),
-    builder: (sheetCtx) {
-      return DraggableScrollableSheet(
+    builder: (sheetCtx) => _CommunityCommentsSheet(initialPost: post),
+  );
+}
+
+class _CommunityCommentsSheet extends StatefulWidget {
+  final CommunityPost initialPost;
+
+  const _CommunityCommentsSheet({required this.initialPost});
+
+  @override
+  State<_CommunityCommentsSheet> createState() =>
+      _CommunityCommentsSheetState();
+}
+
+class _CommunityCommentsSheetState extends State<_CommunityCommentsSheet> {
+  final TextEditingController _commentController = TextEditingController();
+  CommunityProvider? _communityProvider;
+  bool _isSending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _communityProvider = context.read<CommunityProvider>();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _communityProvider?.listenComments(widget.initialPost.id);
+    });
+  }
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    _communityProvider?.stopListeningComments(widget.initialPost.id);
+    super.dispose();
+  }
+
+  String _formatCommentTime(DateTime dt, bool isArabic) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inSeconds < 60) return isArabic ? 'الآن' : 'Just now';
+    if (diff.inMinutes < 60) {
+      return isArabic ? 'منذ ${diff.inMinutes} د' : '${diff.inMinutes}m ago';
+    }
+    if (diff.inHours < 24) {
+      return isArabic ? 'منذ ${diff.inHours} س' : '${diff.inHours}h ago';
+    }
+    if (diff.inDays < 7) {
+      return isArabic ? 'منذ ${diff.inDays} ي' : '${diff.inDays}d ago';
+    }
+    return DateFormat('MMM d', isArabic ? 'ar' : 'en').format(dt);
+  }
+
+  Future<void> _submitComment(
+    CommunityProvider provider,
+    dynamic authUser,
+    dynamic profile,
+    bool isArabic,
+  ) async {
+    if (_isSending || authUser == null) return;
+    final text = _commentController.text.trim();
+    if (text.isEmpty) return;
+
+    setState(() => _isSending = true);
+    final authorName = profile?.fullName.isNotEmpty == true
+        ? profile!.fullName as String
+        : authUser.fullName as String;
+    final authorHeadline = profile?.headline?.isNotEmpty == true
+        ? profile!.headline! as String
+        : (isArabic ? 'مهني متخصص' : 'Career Professional');
+
+    final ok = await provider.addComment(
+      postId: widget.initialPost.id,
+      authorId: authUser.uid as String,
+      authorName: authorName,
+      authorHeadline: authorHeadline,
+      authorRole: (authUser.role.name as String).toUpperCase(),
+      authorAvatarUrl: profile?.photoUrl as String?,
+      content: text,
+    );
+
+    if (!mounted) return;
+    setState(() => _isSending = false);
+
+    if (ok) {
+      _commentController.clear();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            provider.errorMessage ??
+                (isArabic ? 'تعذر إرسال التعليق. حاول مرة أخرى.' : 'Failed to add comment.'),
+          ),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final isArabic = Localizations.localeOf(context).languageCode == 'ar';
+    final provider = context.watch<CommunityProvider>();
+    final authUser = context.watch<AuthProvider>().user;
+    final profile = context.watch<ProfileProvider>().profile;
+    final comments = provider.commentsForPost(widget.initialPost.id);
+    final isLoading = provider.isLoadingComments(widget.initialPost.id);
+    final livePost = provider.allPosts
+        .where((p) => p.id == widget.initialPost.id)
+        .firstOrNull;
+    final displayCount = isLoading
+        ? (livePost?.commentsCount ?? widget.initialPost.commentsCount)
+        : comments.length;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: DraggableScrollableSheet(
         expand: false,
         initialChildSize: 0.72,
         minChildSize: 0.45,
         maxChildSize: 0.92,
         builder: (modalCtx, scrollController) {
-          final l10n = AppLocalizations.of(modalCtx);
-          final provider = modalCtx.watch<CommunityProvider>();
-          final authUser = modalCtx.watch<AuthProvider>().user;
-          final profile = modalCtx.watch<ProfileProvider>().profile;
-          final comments = provider.commentsForPost(post.id);
+          return Column(
+            children: [
+              // Drag handle
+              Container(
+                margin: const EdgeInsets.only(top: 10),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 12, 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '${l10n?.commentsTitle ?? (isArabic ? "التعليقات" : "Comments")} ($displayCount)',
+                      style: AppTypography.headlineSmall,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(modalCtx),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1, color: AppColors.border),
+              Expanded(
+                child: isLoading && comments.isEmpty
+                    ? const Center(child: CircularProgressIndicator())
+                    : comments.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.forum_outlined,
+                                    size: 44,
+                                    color: AppColors.textTertiary
+                                        .withValues(alpha: 0.6),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    l10n?.noCommentsYet ??
+                                        (isArabic
+                                            ? 'لا توجد تعليقات بعد. كن أول من يشارك!'
+                                            : 'No comments yet. Start the conversation!'),
+                                    style: const TextStyle(
+                                        color: AppColors.textSecondary),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        : ListView.separated(
+                            controller: scrollController,
+                            padding: const EdgeInsets.all(16),
+                            itemCount: comments.length,
+                            separatorBuilder: (context, index) =>
+                                const SizedBox(height: 12),
+                            itemBuilder: (ctx, index) {
+                              final comment = comments[index];
+                              final isCommentOwner = authUser != null &&
+                                  comment.authorId == authUser.uid;
+                              final isCommentCompany =
+                                  comment.authorRole.toUpperCase() == 'COMPANY';
+                              final commentHeadline =
+                                  (isArabic &&
+                                          (comment.authorHeadline.isEmpty ||
+                                              comment.authorHeadline ==
+                                                  'Career Professional'))
+                                      ? 'مهني متخصص'
+                                      : (isArabic &&
+                                              comment.authorHeadline ==
+                                                  'Verified Employer'
+                                          ? 'جهة توظيف معتمدة'
+                                          : comment.authorHeadline);
 
-          return Padding(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(modalCtx).viewInsets.bottom,
-            ),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 14, 12, 8),
+                              return Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: AppColors.background,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: AppColors.border.withValues(alpha: 0.6),
+                                  ),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Builder(
+                                      builder: (context) {
+                                        final commentAvatar =
+                                            getSafeImageProvider(
+                                                comment.authorAvatarUrl);
+                                        return CircleAvatar(
+                                          radius: 16,
+                                          backgroundColor: isCommentCompany
+                                              ? AppColors.primarySubtle
+                                              : Colors.white,
+                                          backgroundImage: commentAvatar,
+                                          child: commentAvatar == null
+                                              ? Text(
+                                                  comment.authorName.isNotEmpty
+                                                      ? comment.authorName[0]
+                                                          .toUpperCase()
+                                                      : 'U',
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: AppColors.primary,
+                                                  ),
+                                                )
+                                              : null,
+                                        );
+                                      },
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Flexible(
+                                                child: Text(
+                                                  comment.authorName,
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.w700,
+                                                    fontSize: 13,
+                                                  ),
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    _formatCommentTime(
+                                                      comment.createdAt,
+                                                      isArabic,
+                                                    ),
+                                                    style: const TextStyle(
+                                                      fontSize: 10.5,
+                                                      color: AppColors
+                                                          .textTertiary,
+                                                    ),
+                                                  ),
+                                                  if (isCommentOwner) ...[
+                                                    const SizedBox(width: 8),
+                                                    InkWell(
+                                                      onTap: () async {
+                                                        final ok = await provider
+                                                            .deleteComment(
+                                                          commentId: comment.id,
+                                                          postId: widget
+                                                              .initialPost.id,
+                                                        );
+                                                        if (!ok && mounted) {
+                                                          ScaffoldMessenger.of(
+                                                                  this.context)
+                                                              .showSnackBar(
+                                                            SnackBar(
+                                                              content: Text(
+                                                                provider.errorMessage ??
+                                                                    (isArabic
+                                                                        ? 'تعذر حذف التعليق.'
+                                                                        : 'Failed to delete comment.'),
+                                                              ),
+                                                              backgroundColor:
+                                                                  AppColors
+                                                                      .error,
+                                                            ),
+                                                          );
+                                                        }
+                                                      },
+                                                      child: const Icon(
+                                                        Icons.delete_outline,
+                                                        size: 16,
+                                                        color: AppColors.error,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                          if (commentHeadline.isNotEmpty)
+                                            Text(
+                                              commentHeadline,
+                                              style: const TextStyle(
+                                                fontSize: 11,
+                                                color: AppColors.textSecondary,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            comment.content,
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              color: AppColors.textPrimary,
+                                              height: 1.4,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+              ),
+              Container(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  border: Border(top: BorderSide(color: AppColors.border)),
+                ),
+                child: SafeArea(
+                  top: false,
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        '${l10n?.commentsTitle ?? "Comments"} (${comments.isNotEmpty ? comments.length : post.commentsCount})',
-                        style: AppTypography.headlineSmall,
+                      Expanded(
+                        child: TextField(
+                          controller: _commentController,
+                          enabled: !_isSending,
+                          textInputAction: TextInputAction.send,
+                          maxLines: 3,
+                          minLines: 1,
+                          onSubmitted: (_) => _submitComment(
+                            provider,
+                            authUser,
+                            profile,
+                            isArabic,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: l10n?.addCommentHint ??
+                                (isArabic
+                                    ? 'اكتب تعليقاً...'
+                                    : 'Add a thoughtful comment...'),
+                            hintStyle: const TextStyle(
+                              color: AppColors.textSecondary,
+                              fontSize: 13.5,
+                            ),
+                            isDense: true,
+                            filled: true,
+                            fillColor: const Color(0xFFF3F4F6),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(24),
+                              borderSide:
+                                  const BorderSide(color: AppColors.border),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(24),
+                              borderSide: const BorderSide(
+                                color: Color(0xFFD1D5DB),
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(24),
+                              borderSide: const BorderSide(
+                                color: AppColors.primary,
+                                width: 1.5,
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () => Navigator.pop(modalCtx),
+                      const SizedBox(width: 8),
+                      IconButton.filled(
+                        style: IconButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                        ),
+                        icon: _isSending
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.send_rounded,
+                                size: 18, color: Colors.white),
+                        onPressed: _isSending
+                            ? null
+                            : () => _submitComment(
+                                  provider,
+                                  authUser,
+                                  profile,
+                                  isArabic,
+                                ),
                       ),
                     ],
                   ),
                 ),
-                const Divider(height: 1, color: AppColors.border),
-                Expanded(
-                  child: comments.isEmpty
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.forum_outlined,
-                                  size: 44,
-                                  color: AppColors.textTertiary
-                                      .withValues(alpha: 0.6),
-                                ),
-                                const SizedBox(height: 10),
-                                Text(
-                                  l10n?.noCommentsYet ??
-                                      'No comments yet. Start the conversation!',
-                                  style: const TextStyle(
-                                      color: AppColors.textSecondary),
-                                  textAlign: TextAlign.center,
-                                ),
-                              ],
-                            ),
-                          ),
-                        )
-                      : ListView.separated(
-                          controller: scrollController,
-                          padding: const EdgeInsets.all(16),
-                          itemCount: comments.length,
-                          separatorBuilder: (context, index) =>
-                              const SizedBox(height: 12),
-                          itemBuilder: (ctx, index) {
-                            final comment = comments[index];
-                            final isCommentOwner = authUser != null &&
-                                comment.authorId == authUser.uid;
-                            final isCommentCompany = comment.authorRole
-                                    .toUpperCase() ==
-                                'COMPANY';
-
-                            return Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: AppColors.background,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Builder(
-                                    builder: (context) {
-                                      final commentAvatar =
-                                          getSafeImageProvider(comment.authorAvatarUrl);
-                                      return CircleAvatar(
-                                        radius: 16,
-                                        backgroundColor: isCommentCompany
-                                            ? AppColors.primarySubtle
-                                            : Colors.white,
-                                        backgroundImage: commentAvatar,
-                                        child: commentAvatar == null
-                                            ? Text(
-                                                comment.authorName.isNotEmpty
-                                                    ? comment.authorName[0]
-                                                        .toUpperCase()
-                                                    : 'U',
-                                                style: const TextStyle(
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: AppColors.primary,
-                                                ),
-                                              )
-                                            : null,
-                                      );
-                                    },
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Flexible(
-                                              child: Text(
-                                                comment.authorName,
-                                                style: const TextStyle(
-                                                  fontWeight: FontWeight.w700,
-                                                  fontSize: 13,
-                                                ),
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ),
-                                            if (isCommentOwner)
-                                              InkWell(
-                                                onTap: () => provider
-                                                    .deleteComment(
-                                                  commentId: comment.id,
-                                                  postId: post.id,
-                                                ),
-                                                child: const Icon(
-                                                  Icons.delete_outline,
-                                                  size: 16,
-                                                  color: AppColors.error,
-                                                ),
-                                              ),
-                                          ],
-                                        ),
-                                        Text(
-                                          comment.authorHeadline,
-                                          style: const TextStyle(
-                                            fontSize: 11,
-                                            color: AppColors.textSecondary,
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          comment.content,
-                                          style: const TextStyle(
-                                            fontSize: 13,
-                                            color: AppColors.textPrimary,
-                                            height: 1.4,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                ),
-                Container(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    border: Border(top: BorderSide(color: AppColors.border)),
-                  ),
-                  child: SafeArea(
-                    top: false,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: commentController,
-                            decoration: InputDecoration(
-                              hintText: l10n?.addCommentHint ??
-                                  'Add a thoughtful comment...',
-                              isDense: true,
-                              filled: true,
-                              fillColor: AppColors.background,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 11,
-                              ),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(24),
-                                borderSide:
-                                    const BorderSide(color: AppColors.border),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(24),
-                                borderSide:
-                                    const BorderSide(color: AppColors.border),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        IconButton.filled(
-                          style: IconButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                          ),
-                          icon: const Icon(Icons.send_rounded,
-                              size: 18, color: Colors.white),
-                          onPressed: () async {
-                            if (authUser == null) return;
-                            final text = commentController.text.trim();
-                            if (text.isEmpty) return;
-                            commentController.clear();
-
-                            final authorName =
-                                profile?.fullName.isNotEmpty == true
-                                    ? profile!.fullName
-                                    : authUser.fullName;
-                            final authorHeadline =
-                                profile?.headline?.isNotEmpty == true
-                                    ? profile!.headline!
-                                    : 'Career Professional';
-
-                            final ok = await provider.addComment(
-                              postId: post.id,
-                              authorId: authUser.uid,
-                              authorName: authorName,
-                              authorHeadline: authorHeadline,
-                              authorRole: authUser.role.name.toUpperCase(),
-                              authorAvatarUrl: profile?.photoUrl,
-                              content: text,
-                            );
-                            if (!ok && modalCtx.mounted) {
-                              ScaffoldMessenger.of(modalCtx).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    provider.errorMessage ??
-                                        'Failed to add comment.',
-                                  ),
-                                  backgroundColor: AppColors.error,
-                                ),
-                              );
-                            }
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           );
         },
-      );
-    },
-  ).whenComplete(() {
-    commentController.dispose();
-    communityProvider.stopListeningComments(post.id);
-  });
+      ),
+    );
+  }
 }
 
 /// Open the professional post creation or edit modal
@@ -797,7 +969,7 @@ void showCreateOrEditPostModal(
     builder: (sheetCtx) {
       return StatefulBuilder(
         builder: (modalCtx, setModalState) {
-          final isArabic = Localizations.localeOf(context).languageCode == 'ar';
+          final isArabic = Localizations.localeOf(modalCtx).languageCode == 'ar';
           final l10n = AppLocalizations.of(modalCtx);
           final authorName = profile?.fullName.isNotEmpty == true
               ? profile!.fullName

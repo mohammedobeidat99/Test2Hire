@@ -483,7 +483,7 @@ export default function CompanyInterviewsPage() {
                   onChange={(e) => setMeetingType(e.target.value as any)}
                   className="w-full px-3 py-2 text-xs border border-slate-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                 >
-                  <option value="ONLINE">{isRTL ? "مقابلة فيديو عبر الإنترنت (Jitsi / Zoom)" : "Video Call (Online)"}</option>
+                  <option value="ONLINE">{isRTL ? "مقابلة أونلاين (Google Meet / Zoom / رابط الشركة)" : "Online Meeting (Google Meet / Zoom / Company Link)"}</option>
                   <option value="IN_PERSON">{isRTL ? "مقابلة حضورية في مقر الشركة" : "In-Person (On-site)"}</option>
                 </select>
               </div>
@@ -495,7 +495,7 @@ export default function CompanyInterviewsPage() {
                     type="url"
                     value={meetingUrl}
                     onChange={(e) => setMeetingUrl(e.target.value)}
-                    placeholder={isRTL ? "اختياري — يُنشأ رابط غرفة تلقائياً إذا تُرك فارغاً" : "Optional — auto-generated room if blank"}
+                    placeholder={isRTL ? "https://meet.google.com/xxx-yyyy-zzz (اختياري — رابط الشركة أو Google Meet)" : "https://meet.google.com/xxx-yyyy-zzz (optional external meeting link)"}
                     className="w-full px-3 py-2 text-xs border border-slate-300 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>

@@ -1544,7 +1544,7 @@ export async function scheduleInterview(data: Omit<CompanyInterview, "id">): Pro
       notes: data.notes || "",
       type: mobileType,
       meetingType: data.meetingType,
-      meetingUrl: data.meetingType === "ONLINE" ? (data.meetingUrl || `https://meet.jit.si/test2hire-${interviewRef.id}`) : null,
+      meetingUrl: data.meetingType === "ONLINE" ? (data.meetingUrl || null) : null,
       location: data.meetingType === "IN_PERSON" ? (data.location || "Company Office") : null,
       scheduledAt: startIso,
       slots: [

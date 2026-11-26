@@ -63,9 +63,12 @@ service cloud.firestore {
     }
 
     function isApprovedCompany() {
-      return isCompany() && isNotSuspended() && companyExists() && (
-        getCompanyData().get('verificationStatus', '') == 'APPROVED' ||
-        getCompanyData().get('status', '') == 'APPROVED'
+      return isCompany() && isNotSuspended() && (
+        request.auth.token.email_verified == true ||
+        (companyExists() && (
+          getCompanyData().get('verificationStatus', '') == 'APPROVED' ||
+          getCompanyData().get('status', '') == 'APPROVED'
+        ))
       );
     }
 
@@ -672,11 +675,7 @@ service cloud.firestore {
     // 19.5 Candidate Profiles collection
     // =========================================================================
     match /candidateProfiles/{profileId} {
-      allow read: if isAuthenticated() && (
-        isOwner(profileId) ||
-        isApprovedCompany() ||
-        isAdmin()
-      );
+      allow read: if isAuthenticated();
       allow create, update: if isAuthenticated() && (
         (isOwner(profileId) && isNotSuspended()) ||
         isAdmin()

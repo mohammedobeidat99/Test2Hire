@@ -46,25 +46,25 @@ class VerificationStatusBanner extends StatelessWidget {
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
-            color: const Color(0xFFFEF3C7),
+            color: const Color(0xFFEFF6FF),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
           ),
           child: Row(
             children: [
-              const Icon(Icons.hourglass_top_rounded, color: Color(0xFFB45309), size: 24),
+              const Icon(Icons.mark_email_read_outlined, color: AppColors.primary, size: 24),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Verification In Review',
-                      style: AppTypography.labelLarge.copyWith(color: const Color(0xFF78350F)),
+                      'Active Employer Account',
+                      style: AppTypography.labelLarge.copyWith(color: AppColors.primary),
                     ),
                     Text(
-                      'Admins are reviewing your company profile. You can prepare question banks and exam drafts now.',
-                      style: AppTypography.bodySmall.copyWith(color: const Color(0xFF92400E)),
+                      'Your email is verified. You can publish vacancies, review applicants, and schedule interviews immediately.',
+                      style: AppTypography.bodySmall.copyWith(color: AppColors.textSecondary),
                     ),
                   ],
                 ),

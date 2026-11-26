@@ -46,21 +46,23 @@ class _CandidateHomeScreenState extends State<CandidateHomeScreen>
   int _selectedFeedFilter = 0; // 0: All Feed, 1: Discussions, 2: Jobs for You
   String? _initializedUid;
   bool _didInitialLoad = false;
+  AuthProvider? _authProvider;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _authProvider = context.read<AuthProvider>();
+    _authProvider?.addListener(_onAuthChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _initCandidateData();
     });
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final uid = context.watch<AuthProvider>().user?.uid;
+  void _onAuthChanged() {
+    if (!mounted) return;
+    final uid = _authProvider?.user?.uid;
     if (_didInitialLoad && uid != _initializedUid) {
       _initializedUid = uid;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -87,6 +89,7 @@ class _CandidateHomeScreenState extends State<CandidateHomeScreen>
 
   @override
   void dispose() {
+    _authProvider?.removeListener(_onAuthChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

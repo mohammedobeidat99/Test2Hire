@@ -79,11 +79,10 @@ class InterviewRemoteDataSourceImpl implements InterviewRemoteDataSource {
     } catch (e) {
       // Fallback direct Firestore write if running offline/demo
       final docRef = _interviewsCol.doc();
-      final finalMeetingUrl = interviewType == InterviewType.videoCall
-          ? (meetingUrl?.isNotEmpty == true
-              ? meetingUrl!
-              : 'https://meet.jit.si/test2hire-${docRef.id}')
-          : meetingUrl;
+      final finalMeetingUrl =
+          meetingUrl != null && meetingUrl.trim().isNotEmpty
+              ? meetingUrl.trim()
+              : null;
 
       final appDoc = await _firestore.collection('applications').doc(applicationId).get();
       final appData = appDoc.data() ?? {};

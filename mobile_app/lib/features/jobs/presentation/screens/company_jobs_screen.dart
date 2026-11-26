@@ -6,7 +6,6 @@ import '../../../../core/constants/app_typography.dart';
 import '../../../../core/widgets/empty_state_widget.dart';
 import '../../../../core/widgets/status_badge.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
-import '../../../company/presentation/providers/company_provider.dart';
 import '../../domain/entities/job_posting.dart';
 import '../providers/company_jobs_provider.dart';
 
@@ -31,8 +30,6 @@ class _CompanyJobsScreenState extends State<CompanyJobsScreen> {
 
   void _showStatusBottomSheet(BuildContext context, JobPosting job) {
     final provider = context.read<CompanyJobsProvider>();
-    final companyProvider = context.read<CompanyProvider>();
-    final isCompanyApproved = companyProvider.isApproved;
 
     showModalBottomSheet(
       context: context,
@@ -58,23 +55,10 @@ class _CompanyJobsScreenState extends State<CompanyJobsScreen> {
                   ListTile(
                     leading: const Icon(Icons.public, color: AppColors.success),
                     title: const Text('Publish Vacancy'),
-                    subtitle: isCompanyApproved
-                        ? const Text('Make this vacancy visible to candidates')
-                        : const Text('Requires company account approval',
-                            style: TextStyle(color: AppColors.error)),
+                    subtitle: const Text('Make this vacancy visible to candidates'),
                     onTap: () async {
                       final messenger = ScaffoldMessenger.of(context);
                       Navigator.pop(ctx);
-                      if (!isCompanyApproved) {
-                        messenger.showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                                'Cannot publish jobs: Company account must be approved by admin.'),
-                            backgroundColor: AppColors.error,
-                          ),
-                        );
-                        return;
-                      }
                       final ok = await provider.changeStatus(job.id, JobStatus.published);
                       if (!ok) {
                         messenger.showSnackBar(
@@ -189,8 +173,6 @@ class _CompanyJobsScreenState extends State<CompanyJobsScreen> {
   @override
   Widget build(BuildContext context) {
     final jobsProvider = context.watch<CompanyJobsProvider>();
-    final companyProvider = context.watch<CompanyProvider>();
-    final isApproved = companyProvider.isApproved;
 
     return Scaffold(
       appBar: AppBar(
@@ -268,29 +250,6 @@ class _CompanyJobsScreenState extends State<CompanyJobsScreen> {
                     ],
                   ),
                 ),
-
-                if (!isApproved)
-                  Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppColors.warning.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.info_outline, size: 20, color: AppColors.warning),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            'Account pending verification. You can create draft jobs, but publishing requires administrator approval.',
-                            style: AppTypography.bodySmall.copyWith(color: AppColors.textPrimary),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
 
                 // Job list
                 Expanded(

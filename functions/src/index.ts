@@ -271,7 +271,7 @@ export const syncUserProfile = onCall({ cors: true }, async (request) => {
 
     let isApproved = effectiveRole !== "COMPANY";
     if (effectiveRole === "COMPANY") {
-      if (existingClaims.isApproved === true) {
+      if (authUser.emailVerified === true || existingClaims.isApproved === true) {
         isApproved = true;
       } else {
         const companySnap = await db.collection("companies").doc(uid).get();
@@ -1939,10 +1939,20 @@ export const scheduleInterview = onCall({ cors: true }, async (request) => {
   const interviewRef = db.collection("interviews").doc();
   const interviewId = interviewRef.id;
 
-  // Auto-generate secure Jitsi room if video call and no custom URL provided
-  const finalMeetingUrl = normalizedType === "VIDEO_CALL"
-    ? (typeof meetingUrl === "string" && meetingUrl.trim().length > 0 ? meetingUrl.trim() : `https://meet.jit.si/test2hire-${interviewId}`)
-    : (typeof meetingUrl === "string" && meetingUrl.trim().length > 0 ? meetingUrl.trim() : null);
+  // Validate optional external meeting URL (e.g., Google Meet / Zoom / Teams / company link)
+  let finalMeetingUrl: string | null = null;
+  if (typeof meetingUrl === "string" && meetingUrl.trim().length > 0) {
+    const trimmedUrl = meetingUrl.trim();
+    try {
+      const parsed = new URL(trimmedUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("Invalid protocol");
+      }
+      finalMeetingUrl = parsed.toString();
+    } catch {
+      throw new HttpsError("invalid-argument", "Meeting URL must be a valid http(s) link.");
+    }
+  }
 
   const parsedSlots = slots.map((s: any, index: number) => ({
     slotIndex: index,

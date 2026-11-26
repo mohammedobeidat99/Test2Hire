@@ -11,6 +11,7 @@ class CommunityProvider extends ChangeNotifier {
 
   List<CommunityPost> _posts = [];
   final Map<String, List<CommunityComment>> _commentsByPostId = {};
+  final Set<String> _loadingCommentPostIds = {};
   final Set<String> _likeInFlightPostIds = {};
 
   bool _isLoading = false;
@@ -60,6 +61,10 @@ class CommunityProvider extends ChangeNotifier {
 
   List<CommunityComment> commentsForPost(String postId) {
     return _commentsByPostId[postId] ?? const [];
+  }
+
+  bool isLoadingComments(String postId) {
+    return _loadingCommentPostIds.contains(postId);
   }
 
   void setTopic(String topic) {
@@ -125,19 +130,31 @@ class CommunityProvider extends ChangeNotifier {
 
   void listenComments(String postId) {
     _commentSubscriptions[postId]?.cancel();
+    if (!_commentsByPostId.containsKey(postId)) {
+      _loadingCommentPostIds.add(postId);
+      notifyListeners();
+    }
     _commentSubscriptions[postId] = _firestore
         .collection('communityComments')
         .where('postId', isEqualTo: postId)
         .limit(100)
         .snapshots()
-        .listen((snapshot) {
-      final list = snapshot.docs
-          .map((doc) => CommunityComment.fromMap(doc.data(), doc.id))
-          .toList();
-      list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-      _commentsByPostId[postId] = list;
-      notifyListeners();
-    });
+        .listen(
+      (snapshot) {
+        final list = snapshot.docs
+            .map((doc) => CommunityComment.fromMap(doc.data(), doc.id))
+            .toList();
+        list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        _commentsByPostId[postId] = list;
+        _loadingCommentPostIds.remove(postId);
+        notifyListeners();
+      },
+      onError: (err) {
+        _loadingCommentPostIds.remove(postId);
+        _errorMessage = err.toString();
+        notifyListeners();
+      },
+    );
   }
 
   void stopListeningComments(String postId) {
@@ -513,6 +530,7 @@ class CommunityProvider extends ChangeNotifier {
       await _firestore.collection('communityComments').doc(commentId).delete();
       await _firestore.collection('communityPosts').doc(postId).update({
         'commentsCount': FieldValue.increment(-1),
+        'updatedAt': FieldValue.serverTimestamp(),
       });
       return true;
     } catch (e) {

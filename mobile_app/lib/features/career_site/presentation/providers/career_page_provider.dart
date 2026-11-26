@@ -27,30 +27,46 @@ class CareerPageProvider extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   String? get successMessage => _successMessage;
 
+  String? _activeCompanyId;
+
   void listenCareerPage(String companyId) {
     _pageSubscription?.cancel();
     _jobsSubscription?.cancel();
 
+    if (_activeCompanyId != companyId) {
+      _careerPage = null;
+      _publicJobs = [];
+    }
+    _activeCompanyId = companyId;
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
 
     _pageSubscription = _repository.listenCompanyCareerPage(companyId).listen(
       (page) {
+        if (_activeCompanyId != companyId) return;
         _careerPage = page;
         _isLoading = false;
         _errorMessage = null;
         notifyListeners();
       },
       onError: (err) {
+        if (_activeCompanyId != companyId) return;
         _isLoading = false;
-        _errorMessage = err.toString();
+        final raw = err.toString().toLowerCase();
+        if (raw.contains('permission-denied')) {
+          _errorMessage =
+              'This profile is currently unavailable or requires sign-in. Please try again.';
+        } else {
+          _errorMessage = 'Could not load company profile. Please try again.';
+        }
         notifyListeners();
       },
     );
 
     _jobsSubscription = _repository.listenCompanyPublicJobs(companyId).listen(
       (jobs) {
+        if (_activeCompanyId != companyId) return;
         _publicJobs = jobs;
         notifyListeners();
       },

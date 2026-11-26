@@ -279,67 +279,85 @@ export default function CompanyProfilePage() {
       </div>
 
       {/* Verification Status Banner */}
-      <div
-        className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
-          verificationStatus === "APPROVED"
-            ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200"
-            : verificationStatus === "REJECTED" || verificationStatus === "SUSPENDED"
-            ? "bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-200"
-            : "bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200"
-        }`}
-      >
-        <div className="flex items-center gap-3">
+      {(() => {
+        const isEmailVerified = Boolean(auth.currentUser?.emailVerified);
+        const isVerifiedActive =
+          verificationStatus === "APPROVED" ||
+          (isEmailVerified && verificationStatus !== "SUSPENDED");
+        return (
           <div
-            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-              verificationStatus === "APPROVED"
-                ? "bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400"
-                : verificationStatus === "REJECTED" || verificationStatus === "SUSPENDED"
-                ? "bg-rose-100 dark:bg-rose-900/60 text-rose-600 dark:text-rose-400"
-                : "bg-amber-100 dark:bg-amber-900/60 text-amber-600 dark:text-amber-400"
+            className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
+              isVerifiedActive
+                ? "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200"
+                : verificationStatus === "SUSPENDED"
+                ? "bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-200"
+                : "bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200"
             }`}
           >
-            {verificationStatus === "APPROVED" ? (
-              <CheckCircle2 className="w-6 h-6" />
-            ) : verificationStatus === "REJECTED" || verificationStatus === "SUSPENDED" ? (
-              <XCircle className="w-6 h-6" />
-            ) : (
-              <Clock className="w-6 h-6" />
-            )}
-          </div>
-          <div>
-            <h3 className="font-bold text-sm">
-              {verificationStatus === "APPROVED"
-                ? t("verifiedTitle")
-                : verificationStatus === "REJECTED"
-                ? language === "ar"
-                  ? "تم رفض توثيق الحساب"
-                  : "Verification Rejected"
-                : verificationStatus === "SUSPENDED"
-                ? language === "ar"
-                  ? "تم إيقاف حساب الشركة مؤقتاً"
-                  : "Company Account Suspended"
-                : t("pendingTitle")}
-            </h3>
-            <p className="text-xs opacity-80 mt-0.5">
-              {verificationStatus === "APPROVED"
-                ? t("verifiedDesc")
-                : verificationStatus === "REJECTED"
-                ? language === "ar"
-                  ? "يرجى تحديث بيانات السجل التجاري والتواصل مع إدارة المنصة."
-                  : "Please update your commercial details and contact platform support."
-                : verificationStatus === "SUSPENDED"
-                ? language === "ar"
-                  ? "تم تعليق صلاحيات النشر حالياً. يرجى التواصل مع الإدارة."
-                  : "Publishing is currently paused. Please contact platform administrators."
-                : t("pendingDesc")}
-            </p>
-          </div>
-        </div>
+            <div className="flex items-center gap-3">
+              <div
+                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                  isVerifiedActive
+                    ? "bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400"
+                    : verificationStatus === "SUSPENDED"
+                    ? "bg-rose-100 dark:bg-rose-900/60 text-rose-600 dark:text-rose-400"
+                    : "bg-amber-100 dark:bg-amber-900/60 text-amber-600 dark:text-amber-400"
+                }`}
+              >
+                {isVerifiedActive ? (
+                  <CheckCircle2 className="w-6 h-6" />
+                ) : verificationStatus === "SUSPENDED" ? (
+                  <XCircle className="w-6 h-6" />
+                ) : (
+                  <Clock className="w-6 h-6" />
+                )}
+              </div>
+              <div>
+                <h3 className="font-bold text-sm">
+                  {verificationStatus === "APPROVED"
+                    ? t("verifiedTitle")
+                    : verificationStatus === "SUSPENDED"
+                    ? language === "ar"
+                      ? "تم إيقاف حساب الشركة مؤقتاً"
+                      : "Company Account Suspended"
+                    : isEmailVerified
+                    ? language === "ar"
+                      ? "البريد الإلكتروني موثّق — حسابك جاهز للنشر"
+                      : "Email Verified — Ready to Publish Jobs"
+                    : language === "ar"
+                    ? "يرجى تأكيد البريد الإلكتروني"
+                    : "Email Verification Required"}
+                </h3>
+                <p className="text-xs opacity-80 mt-0.5">
+                  {verificationStatus === "APPROVED"
+                    ? t("verifiedDesc")
+                    : verificationStatus === "SUSPENDED"
+                    ? language === "ar"
+                      ? "تم تعليق صلاحيات النشر حالياً. يرجى التواصل مع الإدارة."
+                      : "Publishing is currently paused. Please contact platform administrators."
+                    : isEmailVerified
+                    ? language === "ar"
+                      ? "يمكنك نشر الوظائف وإدارة المتقدمين والمقابلات مباشرة دون انتظار موافقة يدوية."
+                      : "You can publish vacancies, evaluate candidates, and schedule interviews immediately without waiting for manual admin approval."
+                    : language === "ar"
+                    ? "قم بتأكيد بريدك الإلكتروني لتفعيل صلاحية نشر الوظائف تلقائياً."
+                    : "Verify your email address to automatically unlock job publishing."}
+                </p>
+              </div>
+            </div>
 
-        <span className="text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 shadow-sm border border-slate-200 dark:border-slate-700 shrink-0">
-          {verificationStatus}
-        </span>
-      </div>
+            <span className="text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 shadow-sm border border-slate-200 dark:border-slate-700 shrink-0">
+              {verificationStatus === "APPROVED"
+                ? "APPROVED"
+                : verificationStatus === "SUSPENDED"
+                ? "SUSPENDED"
+                : isEmailVerified
+                ? "EMAIL VERIFIED"
+                : "UNVERIFIED"}
+            </span>
+          </div>
+        );
+      })()}
 
       {/* Action Notification */}
       {feedback && (

@@ -41,14 +41,17 @@ class CareerPageRemoteDataSourceImpl implements CareerPageRemoteDataSource {
         .doc(companyId)
         .snapshots()
         .asyncMap((snapshot) async {
-      final jobsSnap = await _firestore
-          .collection('jobs')
-          .where('companyId', isEqualTo: companyId)
-          .get();
-      final openDocs = jobsSnap.docs.where((d) {
-        final st = (d.data()['status'] ?? 'PUBLISHED').toString().toUpperCase();
-        return st == 'PUBLISHED' || st == 'OPEN';
-      }).toList();
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> openDocs = const [];
+      try {
+        final jobsSnap = await _firestore
+            .collection('jobs')
+            .where('companyId', isEqualTo: companyId)
+            .where('status', whereIn: ['PUBLISHED', 'OPEN'])
+            .get();
+        openDocs = jobsSnap.docs;
+      } catch (_) {
+        openDocs = const [];
+      }
 
       if (snapshot.exists && snapshot.data() != null) {
         return CompanyCareerPageModel.fromFirestore(snapshot, openDocs.length);
@@ -75,14 +78,17 @@ class CareerPageRemoteDataSourceImpl implements CareerPageRemoteDataSource {
   @override
   Future<CompanyCareerPage?> getCompanyCareerPage(String companyId) async {
     final doc = await _firestore.collection('companies').doc(companyId).get();
-    final jobsQuery = await _firestore
-        .collection('jobs')
-        .where('companyId', isEqualTo: companyId)
-        .get();
-    final openDocs = jobsQuery.docs.where((d) {
-      final st = (d.data()['status'] ?? 'PUBLISHED').toString().toUpperCase();
-      return st == 'PUBLISHED' || st == 'OPEN';
-    }).toList();
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> openDocs = const [];
+    try {
+      final jobsQuery = await _firestore
+          .collection('jobs')
+          .where('companyId', isEqualTo: companyId)
+          .where('status', whereIn: ['PUBLISHED', 'OPEN'])
+          .get();
+      openDocs = jobsQuery.docs;
+    } catch (_) {
+      openDocs = const [];
+    }
 
     if (doc.exists && doc.data() != null) {
       return CompanyCareerPageModel.fromFirestore(doc, openDocs.length);
@@ -109,13 +115,10 @@ class CareerPageRemoteDataSourceImpl implements CareerPageRemoteDataSource {
     return _firestore
         .collection('jobs')
         .where('companyId', isEqualTo: companyId)
+        .where('status', whereIn: ['PUBLISHED', 'OPEN'])
         .snapshots()
         .map((snapshot) {
       final jobs = snapshot.docs
-          .where((doc) {
-            final st = (doc.data()['status'] ?? 'PUBLISHED').toString().toUpperCase();
-            return st == 'PUBLISHED' || st == 'OPEN';
-          })
           .map((doc) => JobPostingModel.fromFirestore(doc))
           .toList();
       jobs.sort((a, b) {
@@ -132,13 +135,10 @@ class CareerPageRemoteDataSourceImpl implements CareerPageRemoteDataSource {
     final snapshot = await _firestore
         .collection('jobs')
         .where('companyId', isEqualTo: companyId)
+        .where('status', whereIn: ['PUBLISHED', 'OPEN'])
         .get();
 
     final jobs = snapshot.docs
-        .where((doc) {
-          final st = (doc.data()['status'] ?? 'PUBLISHED').toString().toUpperCase();
-          return st == 'PUBLISHED' || st == 'OPEN';
-        })
         .map((doc) => JobPostingModel.fromFirestore(doc))
         .toList();
     jobs.sort((a, b) {

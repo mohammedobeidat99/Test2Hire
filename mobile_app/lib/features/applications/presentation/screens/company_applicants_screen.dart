@@ -61,7 +61,7 @@ class _CompanyApplicantsScreenState extends State<CompanyApplicantsScreen> {
         return SafeArea(
           child: ConstrainedBox(
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.85,
+              maxHeight: MediaQuery.of(ctx).size.height * 0.85,
             ),
             child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),

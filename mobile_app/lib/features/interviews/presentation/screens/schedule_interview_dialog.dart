@@ -156,29 +156,28 @@ class _ScheduleInterviewDialogState extends State<ScheduleInterviewDialog> {
               if (_selectedType == InterviewType.videoCall) ...[
                 TextFormField(
                   controller: _meetingUrlController,
-                  decoration: InputDecoration(
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
                     labelText: 'Meeting Link (Optional)',
-                    hintText: 'Leave empty to auto-generate Jitsi room',
-                    border: const OutlineInputBorder(),
-                    prefixIcon: const Icon(Icons.link),
-                    suffixIcon: IconButton(
-                      icon: const Icon(Icons.auto_fix_high, color: AppColors.secondary),
-                      tooltip: 'Auto-generate secure room',
-                      onPressed: () {
-                        final appId = widget.application.id;
-                        final roomSlug = appId.length > 8
-                            ? appId.substring(0, 8)
-                            : (appId.isNotEmpty
-                                ? appId
-                                : DateTime.now().millisecondsSinceEpoch.toString().substring(6));
-                        _meetingUrlController.text = 'https://meet.jit.si/test2hire-$roomSlug';
-                      },
-                    ),
+                    hintText: 'https://meet.google.com/xxx-yyyy-zzz',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.link),
                   ),
+                  validator: (val) {
+                    final trimmed = val?.trim() ?? '';
+                    if (trimmed.isEmpty) return null;
+                    final uri = Uri.tryParse(trimmed);
+                    if (uri == null ||
+                        !(uri.scheme == 'http' || uri.scheme == 'https') ||
+                        uri.host.isEmpty) {
+                      return 'Please enter a valid http(s) meeting link';
+                    }
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 4),
                 const Text(
-                  'Test2Hire will generate a private encrypted video link if left empty.',
+                  'Paste your Google Meet, Zoom, Teams, or company meeting link (optional).',
                   style: TextStyle(fontSize: 11, color: AppColors.textTertiary),
                 ),
                 const SizedBox(height: 12),

@@ -400,27 +400,25 @@ function CompanyPortalNavContent({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-2 sm:gap-3">
             {/* Verification Status Badge */}
             {(() => {
-              const status = companyData?.verificationStatus || "PENDING";
-              if (status === "APPROVED") {
-                return (
-                  <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/80">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>{t("verifiedCompany")}</span>
-                  </div>
-                );
-              }
-              if (status === "REJECTED" || status === "SUSPENDED") {
+              const status = (companyData?.verificationStatus || "").toUpperCase();
+              if (status === "SUSPENDED") {
                 return (
                   <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-50 dark:bg-rose-950/70 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800/80">
                     <XCircle className="w-3.5 h-3.5" />
+                    <span>{language === "ar" ? "حساب موقوف" : "Account Suspended"}</span>
+                  </div>
+                );
+              }
+              if (status === "APPROVED" || emailVerified) {
+                return (
+                  <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/80">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>
-                      {language === "ar"
-                        ? status === "SUSPENDED"
-                          ? "حساب موقوف"
-                          : "مرفوض التوثيق"
-                        : status === "SUSPENDED"
-                        ? "Account Suspended"
-                        : "Verification Rejected"}
+                      {status === "APPROVED"
+                        ? t("verifiedCompany")
+                        : language === "ar"
+                        ? "بريد موثّق"
+                        : "Email Verified"}
                     </span>
                   </div>
                 );
@@ -428,7 +426,7 @@ function CompanyPortalNavContent({ children }: { children: React.ReactNode }) {
               return (
                 <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 dark:bg-amber-950/70 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/80">
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>{language === "ar" ? "قيد المراجعة" : "Pending Review"}</span>
+                  <span>{language === "ar" ? "بانتظار تأكيد البريد" : "Verify Email"}</span>
                 </div>
               );
             })()}

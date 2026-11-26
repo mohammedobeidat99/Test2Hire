@@ -113,20 +113,8 @@ class _CreateEditJobScreenState extends State<CreateEditJobScreen> {
 
     final user = context.read<AuthProvider>().user;
     final company = context.read<CompanyProvider>().company;
-    final isApproved = context.read<CompanyProvider>().isApproved;
 
     if (user == null) return;
-
-    if (targetStatus == JobStatus.published && !isApproved) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-              'Cannot publish: Employer profile must be approved by admin. Saving as Draft instead.'),
-          backgroundColor: AppColors.warning,
-        ),
-      );
-      targetStatus = JobStatus.draft;
-    }
 
     final minSal = double.tryParse(_minSalaryController.text.trim());
     final maxSal = double.tryParse(_maxSalaryController.text.trim());
